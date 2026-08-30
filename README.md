@@ -24,8 +24,8 @@ fanLevel1DayInletProcent = 20
 fanLevel1DayExhaustProcent = 25
 fanLevel2DayInletProcent = 35
 fanLevel2DayExhaustProcent = 40
-fanLevel3DayInletProcent = 55
-fanLevel3DayExhaustProcent = 60
+fanLevel3DayInletProcent = 50
+fanLevel3DayExhaustProcent = 55
 
 
 setup:
@@ -41,7 +41,7 @@ loop:
   if status is night then check if it is time to stop night and if it is run StopNight
   if status is error_network then blink 2 times
   if status is error_nilan then blink 4 times
-  sleep 10 seconds
+  enter light sleep for 15 minutes
 
 StartNight:
   connect to nilan

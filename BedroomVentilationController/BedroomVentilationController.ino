@@ -5,6 +5,7 @@
 
 const char* SSID = "Pilotvej47";
 const char* PASSWORD = "Pilotvej47!";
+const char* DENMARK_TIME_ZONE = "CET-1CEST,M3.5.0/2,M10.5.0/3";
 
 constexpr uint16_t NILAN_VID = 0x0483;
 constexpr uint16_t NILAN_PID = 0x5740;
@@ -19,8 +20,8 @@ constexpr int START_NIGHT_MINUTE = 19 * 60;
 constexpr int STOP_NIGHT_MINUTE = 5 * 60;
 constexpr int NIGHT_INLET_PERCENT = 55;
 constexpr int NIGHT_EXHAUST_PERCENT = 60;
-constexpr int DAY_INLET_PERCENT[] = {20, 35, 55};
-constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 60};
+constexpr int DAY_INLET_PERCENT[] = {20, 35, 50};
+constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 55};
 
 USBHostSerial nilan(NILAN_VID, NILAN_PID);
 bool usbHostStarted = false;
@@ -32,7 +33,7 @@ enum class ControllerStatus {
   ErrorNilan
 };
 
-RTC_DATA_ATTR ControllerStatus status = ControllerStatus::Day;
+ControllerStatus status = ControllerStatus::Day;
 
 void clearNilanInput() {
   while (nilan.available()) {
@@ -205,9 +206,7 @@ bool connectNetworkAndSetTime() {
     delay(250);
   }
 
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-  tzset();
-  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
+  configTzTime(DENMARK_TIME_ZONE, "pool.ntp.org", "time.cloudflare.com");
 
   tm currentTime;
   return getLocalTime(&currentTime, WIFI_TIMEOUT_MS);
@@ -230,29 +229,22 @@ void blinkError(int count) {
 void sleepUntilNextCheck() {
   digitalWrite(LED_BUILTIN, LOW);
   esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US);
-  esp_deep_sleep_start();
+  esp_light_sleep_start();
 }
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
-  bool timerWake =
-      esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
   if (!connectNetworkAndSetTime()) {
     status = ControllerStatus::ErrorNetwork;
-  } else if (status == ControllerStatus::ErrorNetwork) {
-    status = ControllerStatus::Day;
   }
   closeNetwork();
 
-  if (!timerWake && status != ControllerStatus::ErrorNetwork) {
+  if (status != ControllerStatus::ErrorNetwork) {
     tm currentTime;
-    if (getCurrentTime(currentTime)) {
-      stopNight(currentTime);
-    } else {
-      status = ControllerStatus::ErrorNetwork;
-    }
+    getCurrentTime(currentTime);
+    stopNight(currentTime);
   }
 }
 
