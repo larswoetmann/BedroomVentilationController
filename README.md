@@ -1,5 +1,12 @@
 # Logic for BedroomVentilationController
 
+
+fix time zone fejl
+send email ved fejl, start med også at sende emails ved success
+sæt høj fugtighed tilbage til 3 men set 3 fan level ned 
+sluk imellem tidspunkterne hvor der skal gøres noget
+
+
 ## Tested board configuration
 
 - Board: Adafruit Metro ESP32-S3
