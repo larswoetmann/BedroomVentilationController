@@ -3,9 +3,14 @@
 #include <esp_sleep.h>
 #include <time.h>
 
+#if __has_include("email_config.h")
+#include "email_config.h"
+#endif
+
+#include <EMailSender.h>
+
 const char* SSID = "Pilotvej47";
 const char* PASSWORD = "Pilotvej47!";
-const char* DENMARK_TIME_ZONE = "CET-1CEST,M3.5.0/2,M10.5.0/3";
 
 constexpr uint16_t NILAN_VID = 0x0483;
 constexpr uint16_t NILAN_PID = 0x5740;
@@ -20,8 +25,8 @@ constexpr int START_NIGHT_MINUTE = 19 * 60;
 constexpr int STOP_NIGHT_MINUTE = 5 * 60;
 constexpr int NIGHT_INLET_PERCENT = 55;
 constexpr int NIGHT_EXHAUST_PERCENT = 60;
-constexpr int DAY_INLET_PERCENT[] = {20, 35, 50};
-constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 55};
+constexpr int DAY_INLET_PERCENT[] = {20, 35, 55};
+constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 60};
 
 USBHostSerial nilan(NILAN_VID, NILAN_PID);
 bool usbHostStarted = false;
@@ -34,6 +39,24 @@ enum class ControllerStatus {
 };
 
 ControllerStatus status = ControllerStatus::Day;
+
+EMailSender emailSender(EMAIL_SENDER_ADDRESS, EMAIL_SMTP_PASSWORD,
+                        EMAIL_SENDER_ADDRESS, EMAIL_SENDER_NAME,
+                        EMAIL_SMTP_HOST, EMAIL_SMTP_PORT);
+
+void sendEmailNotification() {
+  EMailSender::EMailMessage message;
+
+  if (status == ControllerStatus::ErrorNilan) {
+    message.subject = "Bedroom ventilation controller error";
+    message.message = "The controller could not communicate with or configure the Nilan unit.";
+  } else {
+    message.subject = "Bedroom ventilation controller success";
+    message.message = "The controller configured the Nilan unit.";
+  }
+
+  emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+}
 
 void clearNilanInput() {
   while (nilan.available()) {
@@ -151,14 +174,21 @@ bool isWinterMode(const tm& currentTime) {
          (month == 9 && day >= 1);
 }
 
-bool getCurrentTime(tm& currentTime) {
-  return getLocalTime(&currentTime, 100);
-}
-
 bool isNightTime(const tm& currentTime) {
   int minuteOfDay = currentTime.tm_hour * 60 + currentTime.tm_min;
   return minuteOfDay >= START_NIGHT_MINUTE ||
          minuteOfDay < STOP_NIGHT_MINUTE;
+}
+
+bool openBypass() {
+  return setNilanParameter("RTS", 15);
+}
+
+bool closeBypassIfWinter(const tm& currentTime) {
+  if(isWinterMode(currentTime)) {
+      return setNilanParameter("RTS", 25);
+  }
+  return true;
 }
 
 void startNight() {
@@ -168,33 +198,29 @@ void startNight() {
       NIGHT_EXHAUST_PERCENT, NIGHT_EXHAUST_PERCENT, NIGHT_EXHAUST_PERCENT};
 
   if (!connectToNilan() ||
-      !setNilanParameter("RTS", 15) ||
+      !openBypass() ||
       !setFanPercentages(inletPercentages, exhaustPercentages)) {
     status = ControllerStatus::ErrorNilan;
     return;
   }
 
   status = ControllerStatus::Night;
+  return;
 }
 
 void stopNight(const tm& currentTime) {
-  if (!connectToNilan()) {
-    status = ControllerStatus::ErrorNilan;
-    blinkError(6);
-    return;
-  }
-
-  if ((isWinterMode(currentTime) &&
-       !setNilanParameter("RTS", 25)) ||
+  if (!connectToNilan() ||
+      !closeBypassIfWinter(currentTime) ||
       !setFanPercentages(DAY_INLET_PERCENT, DAY_EXHAUST_PERCENT)) {
     status = ControllerStatus::ErrorNilan;
     return;
   }
 
   status = ControllerStatus::Day;
+  return;
 }
 
-bool connectNetworkAndSetTime() {
+bool connectNetworkAndSetTime(tm currentTime) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
 
@@ -206,9 +232,10 @@ bool connectNetworkAndSetTime() {
     delay(250);
   }
 
-  configTzTime(DENMARK_TIME_ZONE, "pool.ntp.org", "time.cloudflare.com");
+  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+  tzset();
+  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
 
-  tm currentTime;
   return getLocalTime(&currentTime, WIFI_TIMEOUT_MS);
 }
 
@@ -226,41 +253,39 @@ void blinkError(int count) {
   }
 }
 
-void sleepUntilNextCheck() {
+void sleepUntilNextCheck(const tm& currentTime) {
   digitalWrite(LED_BUILTIN, LOW);
-  esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US);
-  esp_light_sleep_start();
+  esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US); //TODO: update to calculate wakeup to be when time is next 05:05 or 19:05
+  esp_deep_sleep_start();
 }
 
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
-  if (!connectNetworkAndSetTime()) {
+  tm currentTime;
+  if (!connectNetworkAndSetTime(currentTime)) {
     status = ControllerStatus::ErrorNetwork;
-  }
-  closeNetwork();
-
-  if (status != ControllerStatus::ErrorNetwork) {
-    tm currentTime;
-    getCurrentTime(currentTime);
-    stopNight(currentTime);
+  } else {
+    if(isNightTime(currentTime)) {
+       startNight();
+    } else {
+      stopNight(currentTime);
+    }
+    delay(4000);
+    sendEmailNotification();
+    closeNetwork();
+    sleepUntilNextCheck(currentTime);
   }
 }
 
 void loop() {
-  tm currentTime;
-  getCurrentTime(currentTime);
-
-  if (status == ControllerStatus::Day && isNightTime(currentTime)) {
-    startNight();
-  } else if (status == ControllerStatus::Night && !isNightTime(currentTime)) {
-    stopNight(currentTime);
-  } else if (status == ControllerStatus::ErrorNetwork) {
+  if (status == ControllerStatus::ErrorNetwork) {
     blinkError(2);
   } else if (status == ControllerStatus::ErrorNilan) {
+    blinkError(3);
+  } else {
     blinkError(4);
   }
-
-  sleepUntilNextCheck();
+  delay(4000);
 }
