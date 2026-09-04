@@ -1,16 +1,11 @@
 #include <WiFi.h>
 #include <USBHostSerial.h>
 #include <esp_sleep.h>
+#include <sys/time.h>
 #include <time.h>
-
-#if __has_include("email_config.h")
-#include "email_config.h"
-#endif
+#include "configs.h"
 
 #include <EMailSender.h>
-
-const char* SSID = "Pilotvej47";
-const char* PASSWORD = "Pilotvej47!";
 
 constexpr uint16_t NILAN_VID = 0x0483;
 constexpr uint16_t NILAN_PID = 0x5740;
@@ -19,8 +14,6 @@ constexpr unsigned long USB_TIMEOUT_MS = 10000;
 constexpr unsigned long USB_SETTLE_MS = 2000;
 constexpr unsigned long REPLY_TIMEOUT_MS = 3000;
 constexpr unsigned long COMMAND_QUIET_MS = 100;
-constexpr uint64_t SLEEP_DURATION_US = 15ULL * 60ULL * 1000000ULL;
-
 constexpr int START_NIGHT_MINUTE = 19 * 60;
 constexpr int STOP_NIGHT_MINUTE = 5 * 60;
 constexpr int NIGHT_INLET_PERCENT = 55;
@@ -35,7 +28,8 @@ enum class ControllerStatus {
   Day,
   Night,
   ErrorNetwork,
-  ErrorNilan
+  ErrorNilan,
+  ErrorEmail
 };
 
 ControllerStatus status = ControllerStatus::Day;
@@ -44,7 +38,7 @@ EMailSender emailSender(EMAIL_SENDER_ADDRESS, EMAIL_SMTP_PASSWORD,
                         EMAIL_SENDER_ADDRESS, EMAIL_SENDER_NAME,
                         EMAIL_SMTP_HOST, EMAIL_SMTP_PORT);
 
-void sendEmailNotification() {
+bool sendEmailNotification() {
   EMailSender::EMailMessage message;
 
   if (status == ControllerStatus::ErrorNilan) {
@@ -55,7 +49,11 @@ void sendEmailNotification() {
     message.message = "The controller configured the Nilan unit.";
   }
 
-  emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+  EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+  if(!response.status) {
+    status = ControllerStatus::ErrorEmail;
+  }
+  return response.status;
 }
 
 void clearNilanInput() {
@@ -220,7 +218,7 @@ void stopNight(const tm& currentTime) {
   return;
 }
 
-bool connectNetworkAndSetTime(tm currentTime) {
+bool connectNetworkAndSetTime(tm& currentTime) {
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
 
@@ -234,6 +232,12 @@ bool connectNetworkAndSetTime(tm currentTime) {
 
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
   tzset();
+
+  // Deep sleep retains the RTC value. Clear it so getLocalTime() cannot
+  // mistake an old, drifting timestamp for a fresh NTP synchronization.
+  timeval invalidTime = {};
+  settimeofday(&invalidTime, nullptr);
+
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
 
   return getLocalTime(&currentTime, WIFI_TIMEOUT_MS);
@@ -253,9 +257,50 @@ void blinkError(int count) {
   }
 }
 
-void sleepUntilNextCheck(const tm& currentTime) {
+void blinkLong() {
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(4000);
   digitalWrite(LED_BUILTIN, LOW);
-  esp_sleep_enable_timer_wakeup(SLEEP_DURATION_US); //TODO: update to calculate wakeup to be when time is next 05:05 or 19:05
+  delay(400);
+}
+
+void sleepUntilNextCheck() {
+  digitalWrite(LED_BUILTIN, LOW);
+
+  time_t nowEpoch = time(nullptr);
+  tm now;
+  localtime_r(&nowEpoch, &now);
+
+  tm nextCheck = now;
+  nextCheck.tm_hour = 5;
+  nextCheck.tm_min = 5;
+  nextCheck.tm_sec = 0;
+  nextCheck.tm_isdst = -1;
+
+  time_t nextCheckEpoch = mktime(&nextCheck);
+
+  if (nextCheckEpoch <= nowEpoch) {
+    nextCheck = now;
+    nextCheck.tm_hour = 19;
+    nextCheck.tm_min = 5;
+    nextCheck.tm_sec = 0;
+    nextCheck.tm_isdst = -1;
+    nextCheckEpoch = mktime(&nextCheck);
+  }
+
+  if (nextCheckEpoch <= nowEpoch) {
+    nextCheck = now;
+    nextCheck.tm_mday += 1;
+    nextCheck.tm_hour = 5;
+    nextCheck.tm_min = 5;
+    nextCheck.tm_sec = 0;
+    nextCheck.tm_isdst = -1;
+    nextCheckEpoch = mktime(&nextCheck);
+  }
+
+  const uint64_t sleepDurationUs =
+      static_cast<uint64_t>(nextCheckEpoch - nowEpoch) * 1000000ULL;
+  esp_sleep_enable_timer_wakeup(sleepDurationUs);
   esp_deep_sleep_start();
 }
 
@@ -274,8 +319,12 @@ void setup() {
     }
     delay(4000);
     sendEmailNotification();
-    closeNetwork();
-    sleepUntilNextCheck(currentTime);
+    blinkLong();
+    if(status == ControllerStatus::Day || status == ControllerStatus::Night) {
+      closeNetwork();
+      sleepUntilNextCheck();
+    }
+    blinkLong();
   }
 }
 
@@ -284,8 +333,10 @@ void loop() {
     blinkError(2);
   } else if (status == ControllerStatus::ErrorNilan) {
     blinkError(3);
-  } else {
+  } else if (status == ControllerStatus::ErrorEmail) {
     blinkError(4);
+  } else {
+    blinkError(5);
   }
   delay(4000);
 }
