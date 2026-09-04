@@ -49,7 +49,7 @@ bool sendEmailNotification() {
     message.message = "The controller configured the Nilan unit.";
   }
 
-  EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+  const EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
   if(!response.status) {
     status = ControllerStatus::ErrorEmail;
   }
