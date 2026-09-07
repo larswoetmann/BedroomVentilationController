@@ -6,6 +6,8 @@
 
 #include <EMailSender.h>
 
+const char* DENMARK_TIME_ZONE = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+
 constexpr uint16_t NILAN_VID = 0x0483;
 constexpr uint16_t NILAN_PID = 0x5740;
 constexpr unsigned long WIFI_TIMEOUT_MS = 15000;
@@ -284,17 +286,14 @@ bool connectNetwork() {
 }
 
 bool setTime() {
-  setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-  tzset();
-
   // Clear the previously synchronized time so getLocalTime() must wait for a
   // fresh NTP result rather than accepting an old, drifting timestamp.
   timeval invalidTime = {};
   settimeofday(&invalidTime, nullptr);
 
-  configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
-  tm currentTime;
-  return getLocalTime(&currentTime, WIFI_TIMEOUT_MS);
+  configTzTime(DENMARK_TIME_ZONE, "pool.ntp.org", "time.cloudflare.com");
+  tm synchronizedTime;
+  return getLocalTime(&synchronizedTime, WIFI_TIMEOUT_MS);
 }
 
 bool connectNetworkAndSetTime() {
@@ -370,12 +369,17 @@ void setup() {
 void loop() {
   const time_t nowEpoch = time(nullptr);
   localtime_r(&nowEpoch, &currentTime);
+  const bool nightTime = isNightTime(currentTime);
 
   bool statusChanged = false;
-  if((status == ControllerStatus::NotSet || status == ControllerStatus::Day) && isNightTime(currentTime)) {
+  if ((status == ControllerStatus::NotSet ||
+       status == ControllerStatus::Day) &&
+      nightTime) {
     startNight();
     statusChanged = true;
-  } else if((status == ControllerStatus::NotSet || status == ControllerStatus::Night) && !isNightTime(currentTime)) {
+  } else if ((status == ControllerStatus::NotSet ||
+              status == ControllerStatus::Night) &&
+             !nightTime) {
     stopNight(currentTime);
     statusChanged = true;
   }
