@@ -1,6 +1,5 @@
 #include <WiFi.h>
 #include <USBHostSerial.h>
-#include <esp_sleep.h>
 #include <sys/time.h>
 #include <time.h>
 #include "configs.h"
@@ -14,6 +13,7 @@ constexpr unsigned long USB_TIMEOUT_MS = 10000;
 constexpr unsigned long USB_SETTLE_MS = 2000;
 constexpr unsigned long REPLY_TIMEOUT_MS = 3000;
 constexpr unsigned long COMMAND_QUIET_MS = 100;
+constexpr unsigned long DELAY_MS = 1UL * 60UL * 1000UL;
 constexpr int START_NIGHT_MINUTE = 19 * 60;
 constexpr int STOP_NIGHT_MINUTE = 5 * 60;
 constexpr int NIGHT_INLET_PERCENT = 55;
@@ -25,6 +25,7 @@ USBHostSerial nilan(NILAN_VID, NILAN_PID);
 bool usbHostStarted = false;
 
 enum class ControllerStatus {
+  NotSet,
   Day,
   Night,
   ErrorNetwork,
@@ -32,29 +33,12 @@ enum class ControllerStatus {
   ErrorEmail
 };
 
-ControllerStatus status = ControllerStatus::Day;
+ControllerStatus status = ControllerStatus::NotSet;
+tm currentTime;
 
 EMailSender emailSender(EMAIL_SENDER_ADDRESS, EMAIL_SMTP_PASSWORD,
                         EMAIL_SENDER_ADDRESS, EMAIL_SENDER_NAME,
                         EMAIL_SMTP_HOST, EMAIL_SMTP_PORT);
-
-bool sendEmailNotification() {
-  EMailSender::EMailMessage message;
-
-  if (status == ControllerStatus::ErrorNilan) {
-    message.subject = "Bedroom ventilation controller error";
-    message.message = "The controller could not communicate with or configure the Nilan unit.";
-  } else {
-    message.subject = "Bedroom ventilation controller success";
-    message.message = "The controller configured the Nilan unit.";
-  }
-
-  const EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
-  if(!response.status) {
-    status = ControllerStatus::ErrorEmail;
-  }
-  return response.status;
-}
 
 void clearNilanInput() {
   while (nilan.available()) {
@@ -150,6 +134,75 @@ bool setNilanParameter(const char* parameter, int value) {
   return sendNilanCommand(command, reply) && reply == "OK";
 }
 
+bool getNilanParameter(const char* parameter, String& value) {
+  String command = "G ";
+  command += parameter;
+  command += '\r';
+  return sendNilanCommand(command, value);
+}
+
+struct NilanReportField {
+  const char* code;
+  const char* name;
+};
+
+const NilanReportField NILAN_REPORT_FIELDS[] = {
+    {"ALR", "Alarm status"},
+    {"MBV", "Mainboard software version"},
+    {"FL0", "Selected fan level"},
+    {"F1I", "Supply fan level 1 (%)"},
+    {"F2I", "Supply fan level 2 (%)"},
+    {"F3I", "Supply fan level 3 (%)"},
+    {"F4I", "Supply fan level 4 (%)"},
+    {"F1O", "Extract fan level 1 (%)"},
+    {"F2O", "Extract fan level 2 (%)"},
+    {"F3O", "Extract fan level 3 (%)"},
+    {"F4O", "Extract fan level 4 (%)"},
+    {"SWT", "Summer/winter threshold"},
+    {"SWD", "Summer/winter setting"},
+    {"DST", "De-icing start setting"},
+    {"DTI", "De-icing interval"},
+    {"DSP", "De-icing stop setting"},
+    {"DMT", "Maximum de-icing time"},
+    {"DDT", "De-icing duration setting"},
+    {"RTS", "Wanted room temperature"},
+    {"FCP", "Filter-change period"},
+    {"DBS", "Regulation dead band"},
+    {"LOT", "Low outdoor-temperature setting"},
+    {"LHL", "Low-humidity fan level"},
+    {"HHL", "High-humidity fan level"},
+    {"GFI", "Current supply fan level"},
+    {"GFO", "Current extract fan level"},
+    {"GT3", "T3 extract-air temperature"},
+    {"GT4", "T4 outlet-air temperature"},
+    {"GT8", "T8 outdoor-air temperature"},
+    {"GBS", "Bypass damper status"},
+    {"GRH", "Current relative humidity"},
+};
+
+String buildNilanReport() {
+  String report;
+  report.reserve(3500);
+  report += "<h2>CTS400 report</h2>";
+  report += "<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\">";
+  report += "<tr><th>Value</th><th>Code</th><th>Raw reading</th></tr>";
+
+  for (const NilanReportField& field : NILAN_REPORT_FIELDS) {
+    String value;
+    const bool readOk = getNilanParameter(field.code, value);
+    report += "<tr><td>";
+    report += field.name;
+    report += "</td><td>";
+    report += field.code;
+    report += "</td><td>";
+    report += readOk ? value : "unavailable";
+    report += "</td></tr>";
+  }
+
+  report += "</table>";
+  return report;
+}
+
 bool setFanPercentages(const int inletPercentages[],
                        const int exhaustPercentages[]) {
   const char* inletParameters[] = {"F1I", "F2I", "F3I"};
@@ -167,9 +220,7 @@ bool setFanPercentages(const int inletPercentages[],
 
 bool isWinterMode(const tm& currentTime) {
   int month = currentTime.tm_mon + 1;
-  int day = currentTime.tm_mday;
-  return month > 9 || month < 5 ||
-         (month == 9 && day >= 1);
+  return month > 9 || month < 5;
 }
 
 bool isNightTime(const tm& currentTime) {
@@ -218,7 +269,7 @@ void stopNight(const tm& currentTime) {
   return;
 }
 
-bool connectNetworkAndSetTime(tm& currentTime) {
+bool connectNetwork() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
 
@@ -229,23 +280,66 @@ bool connectNetworkAndSetTime(tm& currentTime) {
     }
     delay(250);
   }
+  return true;
+}
 
+bool setTime() {
   setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
   tzset();
 
-  // Deep sleep retains the RTC value. Clear it so getLocalTime() cannot
-  // mistake an old, drifting timestamp for a fresh NTP synchronization.
+  // Clear the previously synchronized time so getLocalTime() must wait for a
+  // fresh NTP result rather than accepting an old, drifting timestamp.
   timeval invalidTime = {};
   settimeofday(&invalidTime, nullptr);
 
   configTime(0, 0, "pool.ntp.org", "time.cloudflare.com");
-
+  tm currentTime;
   return getLocalTime(&currentTime, WIFI_TIMEOUT_MS);
+}
+
+bool connectNetworkAndSetTime() {
+  if (!connectNetwork()) {
+    return false;
+  }
+
+  return setTime();
 }
 
 void closeNetwork() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+}
+
+void sendEmailNotification() {
+  EMailSender::EMailMessage message;
+  const bool configurationSucceeded =
+      status == ControllerStatus::Day || status == ControllerStatus::Night;
+
+  if (configurationSucceeded) {
+    message.subject = "Bedroom ventilation controller success";
+    message.message = "<p>The controller configured the Nilan unit.</p>";
+    message.message += buildNilanReport();
+  } else {
+    message.subject = "Bedroom ventilation controller error";
+    message.message =
+        "The controller could not communicate with or configure the Nilan unit.";
+  }
+
+  if (connectNetwork()) {
+    const EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+    if (!response.status) {
+      status = ControllerStatus::ErrorEmail;
+    }
+
+    if(!setTime()) { //to make sure it does not drift
+      status = ControllerStatus::ErrorNetwork;
+    }
+
+  } else {
+    status = ControllerStatus::ErrorNetwork;
+  }
+
+  closeNetwork();
 }
 
 void blinkError(int count) {
@@ -264,79 +358,47 @@ void blinkLong() {
   delay(400);
 }
 
-void sleepUntilNextCheck() {
-  digitalWrite(LED_BUILTIN, LOW);
-
-  time_t nowEpoch = time(nullptr);
-  tm now;
-  localtime_r(&nowEpoch, &now);
-
-  tm nextCheck = now;
-  nextCheck.tm_hour = 5;
-  nextCheck.tm_min = 5;
-  nextCheck.tm_sec = 0;
-  nextCheck.tm_isdst = -1;
-
-  time_t nextCheckEpoch = mktime(&nextCheck);
-
-  if (nextCheckEpoch <= nowEpoch) {
-    nextCheck = now;
-    nextCheck.tm_hour = 19;
-    nextCheck.tm_min = 5;
-    nextCheck.tm_sec = 0;
-    nextCheck.tm_isdst = -1;
-    nextCheckEpoch = mktime(&nextCheck);
-  }
-
-  if (nextCheckEpoch <= nowEpoch) {
-    nextCheck = now;
-    nextCheck.tm_mday += 1;
-    nextCheck.tm_hour = 5;
-    nextCheck.tm_min = 5;
-    nextCheck.tm_sec = 0;
-    nextCheck.tm_isdst = -1;
-    nextCheckEpoch = mktime(&nextCheck);
-  }
-
-  const uint64_t sleepDurationUs =
-      static_cast<uint64_t>(nextCheckEpoch - nowEpoch) * 1000000ULL;
-  esp_sleep_enable_timer_wakeup(sleepDurationUs);
-  esp_deep_sleep_start();
-}
-
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
-
-  tm currentTime;
-  if (!connectNetworkAndSetTime(currentTime)) {
+  if (!connectNetworkAndSetTime()) {
     status = ControllerStatus::ErrorNetwork;
-  } else {
-    if(isNightTime(currentTime)) {
-       startNight();
-    } else {
-      stopNight(currentTime);
-    }
-    delay(4000);
-    sendEmailNotification();
-    blinkLong();
-    if(status == ControllerStatus::Day || status == ControllerStatus::Night) {
-      closeNetwork();
-      sleepUntilNextCheck();
-    }
-    blinkLong();
   }
+  closeNetwork();
 }
 
 void loop() {
+  const time_t nowEpoch = time(nullptr);
+  localtime_r(&nowEpoch, &currentTime);
+
+  bool statusChanged = false;
+  if((status == ControllerStatus::NotSet || status == ControllerStatus::Day) && isNightTime(currentTime)) {
+    startNight();
+    statusChanged = true;
+  } else if((status == ControllerStatus::NotSet || status == ControllerStatus::Night) && !isNightTime(currentTime)) {
+    stopNight(currentTime);
+    statusChanged = true;
+  }
+
+  if(statusChanged) {
+    sendEmailNotification();
+  }
+
+  blinkLong();
+
   if (status == ControllerStatus::ErrorNetwork) {
     blinkError(2);
+    if (connectNetworkAndSetTime()) {
+      status = ControllerStatus::NotSet;
+    }
+    closeNetwork();
   } else if (status == ControllerStatus::ErrorNilan) {
     blinkError(3);
+    status = ControllerStatus::NotSet;
   } else if (status == ControllerStatus::ErrorEmail) {
     blinkError(4);
-  } else {
-    blinkError(5);
+    status = ControllerStatus::NotSet;
   }
-  delay(4000);
+
+  delay(DELAY_MS);
 }
