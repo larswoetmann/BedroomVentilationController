@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<SettingsConfiguration xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <FL0>0</FL0>
+  <F1I>20</F1I>
+  <F2I>35</F2I>
+  <F3I>55</F3I>
+  <F4I>100</F4I>
+  <F1O>25</F1O>
+  <F2O>40</F2O>
+  <F3O>60</F3O>
+  <F4O>100</F4O>
+  <SWT>13</SWT>
+  <SWD>1</SWD>
+  <DST>3</DST>
+  <DTI>5</DTI>
+  <DSP>7</DSP>
+  <DMT>30</DMT>
+  <DDT>300</DDT>
+  <RTS>12</RTS>
+  <FCP>90</FCP>
+  <DBS>0</DBS>
+  <LOT>0</LOT>
+  <LHL>1</LHL>
+  <HHL>3</HHL>
+</SettingsConfiguration>

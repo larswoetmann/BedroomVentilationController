@@ -235,7 +235,7 @@ bool openBypass() {
 
 bool closeBypassIfWinter(const tm& currentTime) {
   if(isWinterMode(currentTime)) {
-      return setNilanParameter("RTS", 25);
+      return setNilanParameter("RTS", 28);
   }
   return true;
 }
