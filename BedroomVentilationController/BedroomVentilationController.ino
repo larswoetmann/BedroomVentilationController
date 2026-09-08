@@ -17,11 +17,11 @@ constexpr unsigned long REPLY_TIMEOUT_MS = 3000;
 constexpr unsigned long COMMAND_QUIET_MS = 100;
 constexpr unsigned long DELAY_MS = 1UL * 60UL * 1000UL;
 constexpr int START_NIGHT_MINUTE = 19 * 60;
-constexpr int STOP_NIGHT_MINUTE = 5 * 60;
+constexpr int STOP_NIGHT_MINUTE = 6 * 60;
 constexpr int NIGHT_INLET_PERCENT = 55;
 constexpr int NIGHT_EXHAUST_PERCENT = 60;
-constexpr int DAY_INLET_PERCENT[] = {20, 35, 55};
-constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 60};
+constexpr int DAY_INLET_PERCENT[] = {20, 35, 45};
+constexpr int DAY_EXHAUST_PERCENT[] = {25, 40, 50};
 
 USBHostSerial nilan(NILAN_VID, NILAN_PID);
 bool usbHostStarted = false;
