@@ -1,0 +1,30 @@
+# Copy this file to the root of the SD card as ventilation.cfg.
+# Times use 24-hour HH:MM format. Night time may span midnight.
+night_start_time = 19:00
+night_end_time = 06:00
+
+# Dates use MM-DD. The end date is exclusive: 10-01 through 05-01 means
+# winter mode applies from October 1 up to, but not including, May 1.
+winter_start_date = 10-01
+winter_end_date = 05-01
+
+# Each list configures Nilan fan levels 1, 2, and 3, in percent (0-100).
+day_inlet_levels = 20, 35, 45
+day_exhaust_levels = 25, 40, 50
+night_inlet_levels = 55, 55, 55
+night_exhaust_levels = 60, 60, 60
+
+# Optional night-time cold-weather reduction. When enabled, the controller
+# reads GT8 (outdoor air temperature) every 15 minutes during night mode and
+# subtracts the calculated percentage points from every night fan level.
+# Example: with 10.0 and 2.5, an outdoor temperature of 8.0 C reduces each
+# night level by 5 percentage points. Omit both settings to disable this.
+# night_temperature_threshold_c = 10.0
+# night_ventilation_reduction_per_degree = 2.5
+
+# Optional static network configuration. Uncomment and replace all four values
+# to disable DHCP. Restart the controller after changing network settings.
+# static_ip = 192.168.1.42
+# static_gateway = 192.168.1.1
+# static_subnet = 255.255.255.0
+# static_dns = 192.168.1.1
