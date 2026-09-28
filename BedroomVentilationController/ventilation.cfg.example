@@ -8,15 +8,43 @@ night_end_time = 06:00
 winter_start_date = 10-01
 winter_end_date = 05-01
 
-# Each list configures Nilan fan levels 1, 2, and 3, in percent (0-100).
-day_inlet_levels = 20, 35, 45
-day_exhaust_levels = 25, 40, 50
-night_inlet_levels = 55, 55, 55
-night_exhaust_levels = 60, 60, 60
+# Day Mode and Night Mode CTS400 settings. Fan levels are 20-100 percent.
+# RTS is the wanted room-temperature setting (10-28). The Day RTS value is
+# applied during the Winter Period; the Night RTS value is always applied.
+day_f1i = 20
+day_f2i = 35
+day_f3i = 55
+day_f4i = 100
+day_f1o = 25
+day_f2o = 40
+day_f3o = 60
+day_f4o = 100
+day_rts = 28
+night_f1i = 20
+night_f2i = 35
+night_f3i = 55
+night_f4i = 100
+night_f1o = 25
+night_f2o = 40
+night_f3o = 60
+night_f4o = 100
+night_rts = 15
+
+# CTS400 settings applied individually from the Local Control Page.
+# SWT is 5-20; DST is 1-5; DSP is 5-10; DMT is 5-60; FCP is 0-360;
+# DBS is 0-4; LHL is 0-3; HHL is 0 or 2-4.
+swt = 13
+dst = 3
+dsp = 7
+dmt = 30
+fcp = 90
+dbs = 0
+lhl = 1
+hhl = 3
 
 # Optional night-time cold-weather reduction. When enabled, the controller
 # reads GT8 (outdoor air temperature) every 15 minutes during night mode and
-# subtracts the calculated percentage points from every night fan level.
+# subtracts the calculated percentage points from every Night Mode fan level.
 # Example: with 10.0 and 2.5, an outdoor temperature of 8.0 C reduces each
 # night level by 5 percentage points. Omit both settings to disable this.
 # night_temperature_threshold_c = 10.0

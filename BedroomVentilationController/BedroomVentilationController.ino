@@ -34,6 +34,53 @@ bool webServerStarted = false;
 unsigned long lastControlCycleAt = 0;
 unsigned long lastNightTemperatureCheckAt = 0;
 int activeNightVentilationReduction = -1;
+String lastCts400Result;
+String lastCts400FailureCode;
+
+constexpr size_t MODE_SETTING_COUNT = 9;
+constexpr size_t FAN_MODE_SETTING_COUNT = 8;
+constexpr size_t ROOM_TEMPERATURE_MODE_SETTING_INDEX = 8;
+constexpr size_t IMMEDIATE_SETTING_COUNT = 8;
+
+static_assert(FAN_MODE_SETTING_COUNT + 1 == MODE_SETTING_COUNT,
+              "Mode settings must contain eight fan levels and RTS.");
+
+enum class Cts400SettingKind {
+  IntegerRange,
+  HighHumidityLevel
+};
+
+struct Cts400SettingDefinition {
+  const char* code;
+  const char* key;
+  const char* name;
+  int minimum;
+  int maximum;
+  Cts400SettingKind kind;
+};
+
+const Cts400SettingDefinition MODE_SETTING_DEFINITIONS[] = {
+    {"F1I", "f1i", "Supply fan level 1 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F2I", "f2i", "Supply fan level 2 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F3I", "f3i", "Supply fan level 3 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F4I", "f4i", "Supply fan level 4 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F1O", "f1o", "Extract fan level 1 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F2O", "f2o", "Extract fan level 2 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F3O", "f3o", "Extract fan level 3 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"F4O", "f4o", "Extract fan level 4 (%)", 20, 100, Cts400SettingKind::IntegerRange},
+    {"RTS", "rts", "Wanted room temperature", 10, 28, Cts400SettingKind::IntegerRange},
+};
+
+const Cts400SettingDefinition IMMEDIATE_SETTING_DEFINITIONS[] = {
+    {"SWT", "swt", "Summer/winter threshold", 5, 20, Cts400SettingKind::IntegerRange},
+    {"DST", "dst", "De-icing start setting", 1, 5, Cts400SettingKind::IntegerRange},
+    {"DSP", "dsp", "De-icing stop setting", 5, 10, Cts400SettingKind::IntegerRange},
+    {"DMT", "dmt", "Maximum de-icing time", 5, 60, Cts400SettingKind::IntegerRange},
+    {"FCP", "fcp", "Filter-change period", 0, 360, Cts400SettingKind::IntegerRange},
+    {"DBS", "dbs", "Regulation dead band", 0, 4, Cts400SettingKind::IntegerRange},
+    {"LHL", "lhl", "Low-humidity fan level", 0, 3, Cts400SettingKind::IntegerRange},
+    {"HHL", "hhl", "High-humidity fan level", 0, 4, Cts400SettingKind::HighHumidityLevel},
+};
 
 enum class ControllerStatus {
   NotSet,
@@ -53,10 +100,9 @@ struct ControllerConfiguration {
   int nightEndMinute;
   int winterStartDate;
   int winterEndDate;
-  int dayInletPercentages[3];
-  int dayExhaustPercentages[3];
-  int nightInletPercentages[3];
-  int nightExhaustPercentages[3];
+  int dayModeSettings[MODE_SETTING_COUNT];
+  int nightModeSettings[MODE_SETTING_COUNT];
+  int immediateSettings[IMMEDIATE_SETTING_COUNT];
   bool useStaticIp;
   IPAddress staticIp;
   IPAddress staticGateway;
@@ -76,6 +122,7 @@ EMailSender emailSender(EMAIL_SENDER_ADDRESS, EMAIL_SMTP_PASSWORD,
 void blinkError(int count);
 void handleHomepage();
 void handleSettingsUpdate();
+void handleCts400SettingApply();
 
 String formatTime(int minuteOfDay) {
   char formatted[6];
@@ -90,21 +137,18 @@ String formatDate(int date) {
   return String(formatted);
 }
 
-String formatFanLevels(const int levels[]) {
-  char formatted[17];
-  snprintf(formatted, sizeof(formatted), "%d%%, %d%%, %d%%", levels[0],
-           levels[1], levels[2]);
-  return String(formatted);
-}
-
-const char* statusName(ControllerStatus controllerStatus) {
+String statusName(ControllerStatus controllerStatus) {
   switch (controllerStatus) {
     case ControllerStatus::NotSet: return "Waiting to configure";
     case ControllerStatus::Day: return "Day";
     case ControllerStatus::Night: return "Night";
     case ControllerStatus::ErrorConfiguration: return "Configuration error";
     case ControllerStatus::ErrorNetwork: return "Network error";
-    case ControllerStatus::ErrorNilan: return "Nilan communication error";
+    case ControllerStatus::ErrorNilan:
+      if (lastCts400FailureCode.isEmpty()) {
+        return "Nilan communication error";
+      }
+      return String("Nilan communication error at ") + lastCts400FailureCode;
     case ControllerStatus::ErrorEmail: return "Email error";
   }
   return "Unknown";
@@ -177,25 +221,14 @@ bool parseDate(const String& text, int& date) {
   return true;
 }
 
-bool parseFanLevels(const String& text, int levels[]) {
-  int separator1 = text.indexOf(',');
-  int separator2 = text.indexOf(',', separator1 + 1);
-  if (separator1 <= 0 || separator2 <= separator1 + 1 ||
-      text.indexOf(',', separator2 + 1) != -1) {
+bool parseCts400Setting(const String& text,
+                        const Cts400SettingDefinition& definition,
+                        int& value) {
+  if (!parseInteger(text, definition.minimum, definition.maximum, value)) {
     return false;
   }
-
-  String levelText[] = {
-      text.substring(0, separator1),
-      text.substring(separator1 + 1, separator2),
-      text.substring(separator2 + 1)};
-  for (size_t i = 0; i < 3; ++i) {
-    levelText[i].trim();
-    if (!parseInteger(levelText[i], 0, 100, levels[i])) {
-      return false;
-    }
-  }
-  return true;
+  return definition.kind != Cts400SettingKind::HighHumidityLevel ||
+         value == 0 || value >= 2;
 }
 
 bool parseIpAddress(const String& text, IPAddress& address) {
@@ -232,10 +265,9 @@ bool loadConfiguration() {
   bool foundNightEnd = false;
   bool foundWinterStart = false;
   bool foundWinterEnd = false;
-  bool foundDayInlet = false;
-  bool foundDayExhaust = false;
-  bool foundNightInlet = false;
-  bool foundNightExhaust = false;
+  bool foundDayMode[MODE_SETTING_COUNT] = {};
+  bool foundNightMode[MODE_SETTING_COUNT] = {};
+  bool foundImmediate[IMMEDIATE_SETTING_COUNT] = {};
   bool foundStaticIp = false;
   bool foundStaticGateway = false;
   bool foundStaticSubnet = false;
@@ -278,18 +310,6 @@ bool loadConfiguration() {
     } else if (key == "winter_end_date" && !foundWinterEnd) {
       parsed = parseDate(value, loaded.winterEndDate);
       foundWinterEnd = parsed;
-    } else if (key == "day_inlet_levels" && !foundDayInlet) {
-      parsed = parseFanLevels(value, loaded.dayInletPercentages);
-      foundDayInlet = parsed;
-    } else if (key == "day_exhaust_levels" && !foundDayExhaust) {
-      parsed = parseFanLevels(value, loaded.dayExhaustPercentages);
-      foundDayExhaust = parsed;
-    } else if (key == "night_inlet_levels" && !foundNightInlet) {
-      parsed = parseFanLevels(value, loaded.nightInletPercentages);
-      foundNightInlet = parsed;
-    } else if (key == "night_exhaust_levels" && !foundNightExhaust) {
-      parsed = parseFanLevels(value, loaded.nightExhaustPercentages);
-      foundNightExhaust = parsed;
     } else if (key == "static_ip" && !foundStaticIp) {
       parsed = parseIpAddress(value, loaded.staticIp);
       foundStaticIp = parsed;
@@ -315,15 +335,50 @@ bool loadConfiguration() {
     }
 
     if (!parsed) {
+      for (size_t i = 0; i < MODE_SETTING_COUNT && !parsed; ++i) {
+        const String dayKey = String("day_") + MODE_SETTING_DEFINITIONS[i].key;
+        const String nightKey = String("night_") + MODE_SETTING_DEFINITIONS[i].key;
+        if (key == dayKey && !foundDayMode[i]) {
+          parsed = parseCts400Setting(value, MODE_SETTING_DEFINITIONS[i],
+                                      loaded.dayModeSettings[i]);
+          foundDayMode[i] = parsed;
+        } else if (key == nightKey && !foundNightMode[i]) {
+          parsed = parseCts400Setting(value, MODE_SETTING_DEFINITIONS[i],
+                                      loaded.nightModeSettings[i]);
+          foundNightMode[i] = parsed;
+        }
+      }
+    }
+    if (!parsed) {
+      for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT && !parsed; ++i) {
+        if (key == IMMEDIATE_SETTING_DEFINITIONS[i].key && !foundImmediate[i]) {
+          parsed = parseCts400Setting(value, IMMEDIATE_SETTING_DEFINITIONS[i],
+                                      loaded.immediateSettings[i]);
+          foundImmediate[i] = parsed;
+        }
+      }
+    }
+
+    if (!parsed) {
       file.close();
       return false;
     }
   }
   file.close();
 
+  for (size_t i = 0; i < MODE_SETTING_COUNT; ++i) {
+    if (!foundDayMode[i] || !foundNightMode[i]) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT; ++i) {
+    if (!foundImmediate[i]) {
+      return false;
+    }
+  }
+
   if (!foundNightStart || !foundNightEnd || !foundWinterStart ||
-      !foundWinterEnd || !foundDayInlet || !foundDayExhaust ||
-      !foundNightInlet || !foundNightExhaust ||
+      !foundWinterEnd ||
       loaded.nightStartMinute == loaded.nightEndMinute ||
       loaded.winterStartDate == loaded.winterEndDate ||
       (foundStaticIp || foundStaticGateway || foundStaticSubnet || foundStaticDns) &&
@@ -342,10 +397,7 @@ bool loadConfiguration() {
 bool parseFormConfiguration(ControllerConfiguration& updated) {
   const char* requiredFields[] = {
       "night_start_time", "night_end_time", "winter_start_date",
-      "winter_end_date", "day_inlet_1", "day_inlet_2", "day_inlet_3",
-      "day_exhaust_1", "day_exhaust_2", "day_exhaust_3", "night_inlet_1",
-      "night_inlet_2", "night_inlet_3", "night_exhaust_1",
-      "night_exhaust_2", "night_exhaust_3"};
+      "winter_end_date"};
   for (const char* field : requiredFields) {
     if (!webServer.hasArg(field)) {
       return false;
@@ -361,20 +413,19 @@ bool parseFormConfiguration(ControllerConfiguration& updated) {
     return false;
   }
 
-  int* levelGroups[] = {updated.dayInletPercentages,
-                        updated.dayExhaustPercentages,
-                        updated.nightInletPercentages,
-                        updated.nightExhaustPercentages};
-  const char* fieldPrefixes[] = {"day_inlet_", "day_exhaust_",
-                                 "night_inlet_", "night_exhaust_"};
-  for (size_t group = 0; group < 4; ++group) {
-    for (size_t level = 0; level < 3; ++level) {
-      const String fieldName = String(fieldPrefixes[group]) + String(level + 1);
-      if (!parseInteger(webServer.arg(fieldName), 0, 100,
-                        levelGroups[group][level])) {
-        return false;
-      }
+  for (size_t i = 0; i < MODE_SETTING_COUNT; ++i) {
+    const String dayField = String("day_") + MODE_SETTING_DEFINITIONS[i].key;
+    const String nightField = String("night_") + MODE_SETTING_DEFINITIONS[i].key;
+    if (!webServer.hasArg(dayField) || !webServer.hasArg(nightField) ||
+        !parseCts400Setting(webServer.arg(dayField), MODE_SETTING_DEFINITIONS[i],
+                            updated.dayModeSettings[i]) ||
+        !parseCts400Setting(webServer.arg(nightField), MODE_SETTING_DEFINITIONS[i],
+                            updated.nightModeSettings[i])) {
+      return false;
     }
+  }
+  for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT; ++i) {
+    updated.immediateSettings[i] = configuration.immediateSettings[i];
   }
 
   updated.useStaticIp = webServer.hasArg("use_static_ip");
@@ -414,27 +465,23 @@ bool saveConfiguration(const ControllerConfiguration& updated) {
   const String nightEnd = formatTime(updated.nightEndMinute);
   const String winterStart = formatDate(updated.winterStartDate);
   const String winterEnd = formatDate(updated.winterEndDate);
-  const bool wroteAll =
+  bool wroteAll =
       file.printf("night_start_time = %s\n", nightStart.c_str()) > 0 &&
       file.printf("night_end_time = %s\n", nightEnd.c_str()) > 0 &&
       file.printf("winter_start_date = %s\n", winterStart.c_str()) > 0 &&
-      file.printf("winter_end_date = %s\n", winterEnd.c_str()) > 0 &&
-      file.printf("day_inlet_levels = %d, %d, %d\n",
-                  updated.dayInletPercentages[0],
-                  updated.dayInletPercentages[1],
-                  updated.dayInletPercentages[2]) > 0 &&
-      file.printf("day_exhaust_levels = %d, %d, %d\n",
-                  updated.dayExhaustPercentages[0],
-                  updated.dayExhaustPercentages[1],
-                  updated.dayExhaustPercentages[2]) > 0 &&
-      file.printf("night_inlet_levels = %d, %d, %d\n",
-                  updated.nightInletPercentages[0],
-                  updated.nightInletPercentages[1],
-                  updated.nightInletPercentages[2]) > 0 &&
-      file.printf("night_exhaust_levels = %d, %d, %d\n",
-                  updated.nightExhaustPercentages[0],
-                  updated.nightExhaustPercentages[1],
-                  updated.nightExhaustPercentages[2]) > 0 &&
+      file.printf("winter_end_date = %s\n", winterEnd.c_str()) > 0;
+  for (size_t i = 0; i < MODE_SETTING_COUNT && wroteAll; ++i) {
+    wroteAll =
+        file.printf("day_%s = %d\n", MODE_SETTING_DEFINITIONS[i].key,
+                    updated.dayModeSettings[i]) > 0 &&
+        file.printf("night_%s = %d\n", MODE_SETTING_DEFINITIONS[i].key,
+                    updated.nightModeSettings[i]) > 0;
+  }
+  for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT && wroteAll; ++i) {
+    wroteAll = file.printf("%s = %d\n", IMMEDIATE_SETTING_DEFINITIONS[i].key,
+                            updated.immediateSettings[i]) > 0;
+  }
+  wroteAll = wroteAll &&
       (!updated.useStaticIp ||
        (file.printf("static_ip = %s\n", updated.staticIp.toString().c_str()) > 0 &&
         file.printf("static_gateway = %s\n", updated.staticGateway.toString().c_str()) > 0 &&
@@ -638,15 +685,21 @@ void appendSettingsRow(String& page, const char* name, const String& value) {
   page += "</td></tr>";
 }
 
-void appendLevelInput(String& page, const char* fieldName, const char* label,
-                      int value) {
+void appendCts400Input(String& page, const String& fieldName,
+                       const Cts400SettingDefinition& definition, int value) {
   page += "<label>";
-  page += label;
+  page += definition.name;
   page += " <input type=\"number\" name=\"";
   page += fieldName;
-  page += "\" min=\"0\" max=\"100\" required value=\"";
+  page += "\" min=\"";
+  page += String(definition.minimum);
+  page += "\" max=\"";
+  page += String(definition.maximum);
+  page += "\" required value=\"";
   page += String(value);
-  page += "\"> %</label>";
+  page += "\"> <code>";
+  page += definition.code;
+  page += "</code></label>";
 }
 
 void appendTextInput(String& page, const char* fieldName, const char* label,
@@ -669,14 +722,6 @@ void appendSettings(String& page) {
   appendSettingsRow(page, "Winter start", formatDate(configuration.winterStartDate));
   appendSettingsRow(page, "Winter end (exclusive)",
                     formatDate(configuration.winterEndDate));
-  appendSettingsRow(page, "Day supply levels (1, 2, 3)",
-                    formatFanLevels(configuration.dayInletPercentages));
-  appendSettingsRow(page, "Day extract levels (1, 2, 3)",
-                    formatFanLevels(configuration.dayExhaustPercentages));
-  appendSettingsRow(page, "Night supply levels (1, 2, 3)",
-                    formatFanLevels(configuration.nightInletPercentages));
-  appendSettingsRow(page, "Night extract levels (1, 2, 3)",
-                    formatFanLevels(configuration.nightExhaustPercentages));
   appendSettingsRow(page, "Network address mode",
                     configuration.useStaticIp ? "Static" : "DHCP");
   if (configuration.useStaticIp) {
@@ -695,7 +740,7 @@ void appendSettings(String& page) {
   }
   page += "</table>";
 
-  page += "<h2>Update settings</h2><form method=\"post\" action=\"/settings\">";
+  page += "<h2>Update controller and mode settings</h2><form method=\"post\" action=\"/settings\">";
   page += "<fieldset><legend>Schedule</legend>";
   page += "<label>Night start <input type=\"time\" name=\"night_start_time\" required value=\"";
   page += formatTime(configuration.nightStartMinute);
@@ -707,21 +752,18 @@ void appendSettings(String& page) {
   page += formatDate(configuration.winterEndDate);
   page += "\"></label></fieldset>";
 
-  page += "<fieldset><legend>Day fan levels</legend>";
-  appendLevelInput(page, "day_inlet_1", "Supply 1", configuration.dayInletPercentages[0]);
-  appendLevelInput(page, "day_inlet_2", "Supply 2", configuration.dayInletPercentages[1]);
-  appendLevelInput(page, "day_inlet_3", "Supply 3", configuration.dayInletPercentages[2]);
-  appendLevelInput(page, "day_exhaust_1", "Extract 1", configuration.dayExhaustPercentages[0]);
-  appendLevelInput(page, "day_exhaust_2", "Extract 2", configuration.dayExhaustPercentages[1]);
-  appendLevelInput(page, "day_exhaust_3", "Extract 3", configuration.dayExhaustPercentages[2]);
-  page += "</fieldset><fieldset><legend>Night fan levels</legend>";
-  appendLevelInput(page, "night_inlet_1", "Supply 1", configuration.nightInletPercentages[0]);
-  appendLevelInput(page, "night_inlet_2", "Supply 2", configuration.nightInletPercentages[1]);
-  appendLevelInput(page, "night_inlet_3", "Supply 3", configuration.nightInletPercentages[2]);
-  appendLevelInput(page, "night_exhaust_1", "Extract 1", configuration.nightExhaustPercentages[0]);
-  appendLevelInput(page, "night_exhaust_2", "Extract 2", configuration.nightExhaustPercentages[1]);
-  appendLevelInput(page, "night_exhaust_3", "Extract 3", configuration.nightExhaustPercentages[2]);
-  page += "</fieldset><fieldset><legend>Night outdoor-temperature reduction</legend>";
+  page += "<fieldset><legend>Day Mode CTS400 settings</legend>";
+  for (size_t i = 0; i < MODE_SETTING_COUNT; ++i) {
+    appendCts400Input(page, String("day_") + MODE_SETTING_DEFINITIONS[i].key,
+                      MODE_SETTING_DEFINITIONS[i], configuration.dayModeSettings[i]);
+  }
+  page += "</fieldset><fieldset><legend>Night Mode CTS400 settings</legend>";
+  for (size_t i = 0; i < MODE_SETTING_COUNT; ++i) {
+    appendCts400Input(page, String("night_") + MODE_SETTING_DEFINITIONS[i].key,
+                      MODE_SETTING_DEFINITIONS[i], configuration.nightModeSettings[i]);
+  }
+  page += "</fieldset><p>Mode settings are saved now and applied when that mode begins, including after startup.</p>";
+  page += "<fieldset><legend>Night outdoor-temperature reduction</legend>";
   page += "<label><input type=\"checkbox\" name=\"use_night_temperature_reduction\"";
   if (configuration.useNightTemperatureReduction) {
     page += " checked";
@@ -750,6 +792,25 @@ void appendSettings(String& page) {
                   configuration.useStaticIp ? configuration.staticDns.toString() : "");
   page += "<p>Restart the controller after changing network settings.</p></fieldset>";
   page += "<button type=\"submit\">Save settings</button></form>";
+
+  page += "<h2>Apply CTS400 settings</h2>";
+  page += "<p>These settings are stored and sent to the Nilan CTS400 Unit immediately.</p>";
+  for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT; ++i) {
+    const Cts400SettingDefinition& definition = IMMEDIATE_SETTING_DEFINITIONS[i];
+    page += "<form method=\"post\" action=\"/cts400\"><label>";
+    page += definition.name;
+    page += " <input type=\"number\" name=\"value\" min=\"";
+    page += String(definition.minimum);
+    page += "\" max=\"";
+    page += String(definition.maximum);
+    page += "\" required value=\"";
+    page += String(configuration.immediateSettings[i]);
+    page += "\"> <code>";
+    page += definition.code;
+    page += "</code></label><input type=\"hidden\" name=\"setting\" value=\"";
+    page += definition.key;
+    page += "\"><button type=\"submit\">Apply</button></form>";
+  }
 }
 
 void handleHomepage() {
@@ -764,6 +825,11 @@ void handleHomepage() {
   page += "</head><body><h1>Bedroom ventilation</h1><p class=\"status\">Controller status: ";
   page += statusName(status);
   page += "</p>";
+  if (!lastCts400Result.isEmpty()) {
+    page += "<p>";
+    page += escapeHtml(lastCts400Result);
+    page += "</p>";
+  }
 
   appendSettings(page);
   page += "<h2>Nilan CTS400 output</h2>";
@@ -791,21 +857,64 @@ void handleSettingsUpdate() {
   }
 
   configuration = updated;
-  status = ControllerStatus::NotSet;
-  lastControlCycleAt = 0;
+  lastCts400Result = "Mode settings saved; they will apply when the relevant mode begins.";
   webServer.sendHeader("Location", "/");
   webServer.send(303);
 }
 
-bool setFanPercentages(const int inletPercentages[],
-                       const int exhaustPercentages[]) {
-  const char* inletParameters[] = {"F1I", "F2I", "F3I"};
-  const char* exhaustParameters[] = {"F1O", "F2O", "F3O"};
+void handleCts400SettingApply() {
+  if (!webServer.hasArg("setting") || !webServer.hasArg("value")) {
+    webServer.send(400, "text/plain", "Missing CTS400 setting or value.");
+    return;
+  }
 
-  for (size_t i = 0; i < 3; ++i) {
-    if (!setNilanParameter(inletParameters[i], inletPercentages[i]) ||
-        !setNilanParameter(exhaustParameters[i], exhaustPercentages[i])) {
-      blinkError(7+i);
+  const String requestedKey = webServer.arg("setting");
+  for (size_t i = 0; i < IMMEDIATE_SETTING_COUNT; ++i) {
+    const Cts400SettingDefinition& definition = IMMEDIATE_SETTING_DEFINITIONS[i];
+    if (requestedKey != definition.key) {
+      continue;
+    }
+
+    int value;
+    if (!parseCts400Setting(webServer.arg("value"), definition, value)) {
+      webServer.send(400, "text/plain", "Invalid CTS400 value.");
+      return;
+    }
+
+    ControllerConfiguration updated = configuration;
+    updated.immediateSettings[i] = value;
+    if (!saveConfiguration(updated)) {
+      webServer.send(500, "text/plain",
+                     "Could not save ventilation.cfg to the SD card.");
+      return;
+    }
+    configuration = updated;
+
+    if (!connectToNilan() || !setNilanParameter(definition.code, value)) {
+      lastCts400FailureCode = definition.code;
+      lastCts400Result = String("Saved ") + definition.code +
+          ", but applying it to the Nilan CTS400 Unit failed.";
+      status = ControllerStatus::ErrorNilan;
+    } else {
+      lastCts400FailureCode = "";
+      lastCts400Result = String("Applied ") + definition.code + " successfully.";
+    }
+    webServer.sendHeader("Location", "/");
+    webServer.send(303);
+    return;
+  }
+
+  webServer.send(400, "text/plain", "Unknown CTS400 setting.");
+}
+
+bool applyModeSettings(const int settings[], bool includeRoomTemperature) {
+  lastCts400FailureCode = "";
+  for (size_t i = 0; i < MODE_SETTING_COUNT; ++i) {
+    if (!includeRoomTemperature && i == ROOM_TEMPERATURE_MODE_SETTING_INDEX) {
+      continue;
+    }
+    if (!setNilanParameter(MODE_SETTING_DEFINITIONS[i].code, settings[i])) {
+      lastCts400FailureCode = MODE_SETTING_DEFINITIONS[i].code;
       return false;
     }
   }
@@ -827,10 +936,8 @@ bool getOutdoorTemperature(float& temperatureC) {
   return true;
 }
 
-bool applyNightVentilationForTemperature() {
-  int inletPercentages[3];
-  int exhaustPercentages[3];
-  int reduction = 0;
+bool calculateNightVentilationReduction(int& reduction) {
+  reduction = 0;
 
   if (configuration.useNightTemperatureReduction) {
     float outdoorTemperatureC;
@@ -845,17 +952,43 @@ bool applyNightVentilationForTemperature() {
     }
   }
 
-  if (reduction == activeNightVentilationReduction) {
-    return true;
-  }
-  for (size_t i = 0; i < 3; ++i) {
-    inletPercentages[i] = max(0, configuration.nightInletPercentages[i] - reduction);
-    exhaustPercentages[i] = max(0, configuration.nightExhaustPercentages[i] - reduction);
-  }
-  if (!setFanPercentages(inletPercentages, exhaustPercentages)) {
+  return true;
+}
+
+bool applyNightVentilationForTemperature() {
+  int reduction;
+  if (!calculateNightVentilationReduction(reduction)) {
     return false;
   }
 
+  if (reduction == activeNightVentilationReduction) {
+    return true;
+  }
+  for (size_t i = 0; i < FAN_MODE_SETTING_COUNT; ++i) {
+    const int value = max(0, configuration.nightModeSettings[i] - reduction);
+    if (!setNilanParameter(MODE_SETTING_DEFINITIONS[i].code, value)) {
+      lastCts400FailureCode = MODE_SETTING_DEFINITIONS[i].code;
+      return false;
+    }
+  }
+  activeNightVentilationReduction = reduction;
+  return true;
+}
+
+bool applyNightModeSettings() {
+  int settings[MODE_SETTING_COUNT];
+  memcpy(settings, configuration.nightModeSettings, sizeof(settings));
+
+  int reduction;
+  if (!calculateNightVentilationReduction(reduction)) {
+    return false;
+  }
+  for (size_t i = 0; i < FAN_MODE_SETTING_COUNT; ++i) {
+    settings[i] = max(0, settings[i] - reduction);
+  }
+  if (!applyModeSettings(settings, true)) {
+    return false;
+  }
   activeNightVentilationReduction = reduction;
   return true;
 }
@@ -880,22 +1013,14 @@ bool isNightTime(const tm& currentTime) {
          minuteOfDay < configuration.nightEndMinute;
 }
 
-bool openBypass() {
-  return setNilanParameter("RTS", 15);
-}
-
-bool closeBypassIfWinter(const tm& currentTime) {
-  if(isWinterMode(currentTime)) {
-      return setNilanParameter("RTS", 28);
-  }
-  return true;
-}
-
 void startNight() {
   activeNightVentilationReduction = -1;
-  if (!connectToNilan() ||
-      !openBypass() ||
-      !applyNightVentilationForTemperature()) {
+  lastCts400FailureCode = "";
+  if (!connectToNilan() || !applyNightModeSettings()) {
+    lastCts400Result = "Could not apply Night Mode settings.";
+    if (!lastCts400FailureCode.isEmpty()) {
+      lastCts400Result += String(" Failed at ") + lastCts400FailureCode + ".";
+    }
     status = ControllerStatus::ErrorNilan;
     return;
   }
@@ -906,10 +1031,13 @@ void startNight() {
 }
 
 void stopNight(const tm& currentTime) {
+  lastCts400FailureCode = "";
   if (!connectToNilan() ||
-      !closeBypassIfWinter(currentTime) ||
-      !setFanPercentages(configuration.dayInletPercentages,
-                          configuration.dayExhaustPercentages)) {
+      !applyModeSettings(configuration.dayModeSettings, isWinterMode(currentTime))) {
+    lastCts400Result = "Could not apply Day Mode settings.";
+    if (!lastCts400FailureCode.isEmpty()) {
+      lastCts400Result += String(" Failed at ") + lastCts400FailureCode + ".";
+    }
     status = ControllerStatus::ErrorNilan;
     return;
   }
@@ -970,6 +1098,7 @@ void startWebServer() {
 
   webServer.on("/", HTTP_GET, handleHomepage);
   webServer.on("/settings", HTTP_POST, handleSettingsUpdate);
+  webServer.on("/cts400", HTTP_POST, handleCts400SettingApply);
   webServer.onNotFound([]() {
     webServer.send(404, "text/plain", "Not found");
   });
@@ -1078,7 +1207,12 @@ void loop() {
       configuration.useNightTemperatureReduction &&
       millis() - lastNightTemperatureCheckAt >= NIGHT_TEMPERATURE_CHECK_MS) {
     lastNightTemperatureCheckAt = millis();
+    lastCts400FailureCode = "";
     if (!connectToNilan() || !applyNightVentilationForTemperature()) {
+      lastCts400Result = "Could not apply Night Mode temperature adjustment.";
+      if (!lastCts400FailureCode.isEmpty()) {
+        lastCts400Result += String(" Failed at ") + lastCts400FailureCode + ".";
+      }
       status = ControllerStatus::ErrorNilan;
     }
   }

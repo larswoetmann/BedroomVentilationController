@@ -17,25 +17,25 @@ The configured division of each day into Day Mode and Night Mode.
 _Avoid_: Timer, timetable
 
 **Day Mode**:
-The scheduled operating period outside Night Mode, using the configured day Supply Fan and Extract Fan levels.
+The scheduled operating period outside Night Mode, using the configured Day Mode CTS400 Settings.
 _Avoid_: Daytime setting
 
 **Night Mode**:
-The scheduled operating period that applies the configured night fan levels and opens the Bypass.
+The scheduled operating period that applies the configured Night Mode CTS400 Settings.
 _Avoid_: Night-time setting
 
 **Winter Period**:
-The configured recurring date range during which the Bypass is closed when the controller returns to Day Mode.
+The configured recurring date range during which the Ventilation Controller applies the Day Mode RTS setting.
 _Avoid_: Winter mode
 
 **Bypass**:
-The CTS400 airflow path that the controller opens for Night Mode and closes during the Winter Period.
+The CTS400 airflow path controlled through the configured Day Mode and Night Mode RTS settings.
 _Avoid_: Bypass damper
 
 ## Airflow
 
 **Fan Level**:
-One of the three configured percentage setpoints for a Supply Fan or Extract Fan in a given operating mode.
+One of the four configured percentage setpoints for a Supply Fan or Extract Fan in a given operating mode.
 _Avoid_: Fan speed, fan percentage
 
 **Supply Fan**:
@@ -53,7 +53,7 @@ _Avoid_: Cold-weather mode
 ## Configuration and observation
 
 **Ventilation Configuration**:
-The user-defined schedule, Winter Period, fan levels, network mode, and optional Night-Temperature Reduction used by the Ventilation Controller.
+The user-defined schedule, Winter Period, Operating-Mode CTS400 Settings, Immediate CTS400 Settings, network mode, and optional Night-Temperature Reduction used by the Ventilation Controller.
 _Avoid_: Settings file, controller settings
 
 **Local Control Page**:
@@ -61,5 +61,21 @@ The trusted-local-network web page used to view controller status and CTS400 rea
 _Avoid_: Public dashboard
 
 **CTS400 Report**:
-The set of supported live CTS400 readings displayed by the Local Control Page and included in controller notifications.
+The collection of live CTS400 values confirmed readable through controller evidence, displayed by the Local Control Page and included in controller notifications.
 _Avoid_: Diagnostic log
+
+**Validated CTS400 Setting**:
+A CTS400 value with a confirmed write operation and a known acceptable value format and range.
+_Avoid_: Writable value, editable parameter
+
+**Operating-Mode CTS400 Setting**:
+A configured value for a Validated CTS400 Setting in either Day Mode or Night Mode. The Ventilation Controller writes the stored value to the Nilan CTS400 Unit when that mode begins, including after startup; the Day Mode RTS value is applied during the Winter Period.
+_Avoid_: Manual override, immediate CTS400 edit
+
+**Immediate CTS400 Setting**:
+A configured Validated CTS400 Setting that is not mode-specific. It is saved and written to the Nilan CTS400 Unit through its individual Apply control on the Local Control Page.
+_Avoid_: Global CTS400 setting, manual override
+
+**Read-Only CTS400 Field**:
+A live CTS400 value displayed in the CTS400 Report that has no confirmed safe write operation or acceptable value range for this controller.
+_Avoid_: Disabled setting, editable parameter

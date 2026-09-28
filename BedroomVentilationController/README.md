@@ -5,11 +5,11 @@ An ESP32-S3 controller for automating a Nilan CTS400 ventilation unit.
 ## Features
 
 - Switches automatically between day and night ventilation schedules.
-- Loads the schedule, winter period, and fan levels from `/ventilation.cfg` on an SD card.
-- Supports separate supply and extract fan levels 1–3 for both day and night modes.
-- Opens the Nilan bypass at night and closes it during the configured winter period.
-- Serves a local web page that shows controller status, configured settings, and supported Nilan CTS400 readings.
-- Lets users update configuration settings from the web page; changes are validated and saved back to the SD card.
+- Loads the schedule, winter period, and CTS400 settings from `/ventilation.cfg` on an SD card.
+- Supports separate Day Mode and Night Mode values for supply and extract fan levels 1–4 and RTS.
+- Applies the active mode's CTS400 values at startup and each mode transition; the Day Mode RTS value is applied during the Winter Period.
+- Serves a local web page that shows controller status, all supported Nilan CTS400 readings, and configurable CTS400 settings.
+- Lets users save validated mode settings and immediately apply supported individual settings from the web page.
 - Can use DHCP by default or an optional static IP address, gateway, subnet mask, and DNS server.
 - Optionally reduces night fan levels as outdoor temperature falls below a configurable threshold.
 - Refreshes the temperature-based night fan adjustment every 15 minutes.
@@ -42,7 +42,7 @@ Keep this file private because it contains network and email credentials.
 
 ### 3. Prepare the SD card
 
-Copy [`ventilation.cfg.example`](ventilation.cfg.example) to the root of a FAT-formatted SD card and rename it to `ventilation.cfg`. Edit the schedule and fan levels before inserting the card.
+Copy [`ventilation.cfg.example`](ventilation.cfg.example) to the root of a FAT-formatted SD card and rename it to `ventilation.cfg`. Set every required Day Mode, Night Mode, and individual CTS400 value before inserting the card.
 
 The controller uses DHCP by default. To use a fixed address, uncomment and set all four `static_*` settings. Choose an unused IP address on the local network, and restart the controller after changing network settings.
 
