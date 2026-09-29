@@ -5,6 +5,7 @@ An ESP32-S3 controller for automating a Nilan CTS400 ventilation unit.
 ## Features
 
 - Switches automatically between day and night ventilation schedules.
+- Interprets schedule times in Danish local time (Europe/Copenhagen), automatically switching between CET and CEST. The Local Control Page shows the controller's local clock.
 - Loads the schedule, winter period, and CTS400 settings from `/ventilation.cfg` on an SD card.
 - Supports separate Day Mode and Night Mode values for supply and extract fan levels 1–4 and RTS.
 - Applies the active mode's CTS400 values at startup and each mode transition; the Day Mode RTS value is applied during the Winter Period.

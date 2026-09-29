@@ -11,7 +11,16 @@
 
 #include <EMailSender.h>
 
-const char* DENMARK_TIME_ZONE = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+// Danish wall-clock time: CET in winter, CEST in summer.
+constexpr char DENMARK_TIME_ZONE[] = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+
+bool getDanishLocalTime(tm& result) {
+  // Reassert the timezone in case another library changed the process-wide TZ.
+  setenv("TZ", DENMARK_TIME_ZONE, 1);
+  tzset();
+  const time_t now = time(nullptr);
+  return localtime_r(&now, &result) != nullptr && result.tm_year > (2016 - 1900);
+}
 
 constexpr uint16_t NILAN_VID = 0x0483;
 constexpr uint16_t NILAN_PID = 0x5740;
@@ -716,7 +725,16 @@ void appendTextInput(String& page, const char* fieldName, const char* label,
 void appendSettings(String& page) {
   page += "<h2>Controller settings</h2>";
   page += "<p>Loaded from <code>/ventilation.cfg</code> on the SD card.</p>";
+  page += "<p>Schedule times use Danish local time (Europe/Copenhagen), with automatic summer/winter time.</p>";
   page += "<table><tr><th>Setting</th><th>Value</th></tr>";
+  tm localNow = {};
+  if (getDanishLocalTime(localNow)) {
+    char localClock[48];
+    strftime(localClock, sizeof(localClock), "%Y-%m-%d %H:%M:%S %Z", &localNow);
+    appendSettingsRow(page, "Controller time (Denmark)", String(localClock));
+  } else {
+    appendSettingsRow(page, "Controller time (Denmark)", "Not synchronized");
+  }
   appendSettingsRow(page, "Night start", formatTime(configuration.nightStartMinute));
   appendSettingsRow(page, "Night end", formatTime(configuration.nightEndMinute));
   appendSettingsRow(page, "Winter start", formatDate(configuration.winterStartDate));
@@ -1186,8 +1204,14 @@ void loop() {
     return;
   }
 
-  const time_t nowEpoch = time(nullptr);
-  localtime_r(&nowEpoch, &currentTime);
+  if (!getDanishLocalTime(currentTime)) {
+    status = ControllerStatus::ErrorNetwork;
+    if (connectNetworkAndSetTime()) {
+      startWebServer();
+      status = ControllerStatus::NotSet;
+    }
+    return;
+  }
   const bool nightTime = isNightTime(currentTime);
 
   bool statusChanged = false;

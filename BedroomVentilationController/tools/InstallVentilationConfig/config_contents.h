@@ -1,6 +1,6 @@
-# Copy this file to the root of the SD card as ventilation.cfg.
+#pragma once
+static const char kConfig[] = R"VENTCFG(# Copy this file to the root of the SD card as ventilation.cfg.
 # Times use 24-hour HH:MM format. Night time may span midnight.
-# Times are Danish local time (Europe/Copenhagen): CET/CEST changes are automatic.
 night_start_time = 19:00
 night_end_time = 06:00
 
@@ -57,3 +57,4 @@ hhl = 3
 # static_gateway = 192.168.1.1
 # static_subnet = 255.255.255.0
 # static_dns = 192.168.1.1
+)VENTCFG";
