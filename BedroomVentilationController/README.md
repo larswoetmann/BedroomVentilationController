@@ -2,6 +2,11 @@
 
 An ESP32-S3 controller for automating a Nilan CTS400 ventilation unit.
 
+## TODO
+
+- send email on alarms
+- send email if bypass is closed in the night
+
 ## Features
 
 - Switches automatically between day and night ventilation schedules.
@@ -23,12 +28,9 @@ An ESP32-S3 controller for automating a Nilan CTS400 ventilation unit.
 
 Install Arduino IDE 2 and install the **esp32 by Espressif Systems** board package. Select the ESP32-S3 board that matches the controller hardware (the generic starting point is **ESP32S3 Dev Module**).
 
-Install these libraries:
+Install `EMailSender` through Arduino IDE's Library Manager. USB host serial support comes from the ESP32 Arduino core; do not install the older external `USBHostSerial` library, because it conflicts with the core's `USBHostSerialClass`.
 
-- [`USBHostSerial`](https://github.com/bertmelis/USBHostSerial): download the repository ZIP, then select **Sketch → Include Library → Add .ZIP Library…** in Arduino IDE.
-- `EMailSender`: install it through Arduino IDE's Library Manager.
-
-The controller uses the ESP32-S3 USB-OTG interface to communicate with the Nilan USB serial adapter. Set **Tools → USB CDC On Boot** to **Disabled**; the USB host cannot start when it is enabled.
+The controller uses the ESP32-S3 USB-OTG interface to communicate with the Nilan USB serial adapter. Set **Tools → USB Mode** to **USB-OTG (TinyUSB)** and **Tools → USB CDC On Boot** to **Disabled**; the USB host cannot start when the native USB device stack owns the OTG peripheral.
 
 ### 2. Add local credentials
 

@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <USBHost.h>
 #include <USBHostSerial.h>
 #include <FS.h>
 #include <SD.h>
@@ -22,8 +23,6 @@ bool getDanishLocalTime(tm& result) {
   return localtime_r(&now, &result) != nullptr && result.tm_year > (2016 - 1900);
 }
 
-constexpr uint16_t NILAN_VID = 0x0483;
-constexpr uint16_t NILAN_PID = 0x5740;
 constexpr unsigned long WIFI_TIMEOUT_MS = 15000;
 constexpr unsigned long USB_TIMEOUT_MS = 10000;
 constexpr unsigned long USB_SETTLE_MS = 2000;
@@ -36,7 +35,7 @@ constexpr char CONFIG_FILE_PATH[] = "/ventilation.cfg";
 constexpr char CONFIG_TEMP_FILE_PATH[] = "/ventilation.tmp";
 constexpr char CONFIG_BACKUP_FILE_PATH[] = "/ventilation.bak";
 
-USBHostSerial nilan(NILAN_VID, NILAN_PID);
+USBHostSerialClass nilan;
 bool usbHostStarted = false;
 WebServer webServer(80);
 bool webServerStarted = false;
@@ -45,6 +44,7 @@ unsigned long lastNightTemperatureCheckAt = 0;
 int activeNightVentilationReduction = -1;
 String lastCts400Result;
 String lastCts400FailureCode;
+String usbEnumerationLog;
 
 constexpr size_t MODE_SETTING_COUNT = 9;
 constexpr size_t FAN_MODE_SETTING_COUNT = 8;
@@ -132,6 +132,24 @@ void blinkError(int count);
 void handleHomepage();
 void handleSettingsUpdate();
 void handleCts400SettingApply();
+String statusName(ControllerStatus controllerStatus);
+bool parseCts400Setting(const String& text,
+                        const Cts400SettingDefinition& definition, int& value);
+bool parseFormConfiguration(ControllerConfiguration& updated);
+bool saveConfiguration(const ControllerConfiguration& updated);
+void appendCts400Input(String& page, const String& fieldName,
+                       const Cts400SettingDefinition& definition, int value);
+
+void recordUsbEnumerationLog(const char* message) {
+  if (message == nullptr || usbEnumerationLog.length() >= 900) {
+    return;
+  }
+
+  if (!usbEnumerationLog.isEmpty()) {
+    usbEnumerationLog += '\n';
+  }
+  usbEnumerationLog += message;
+}
 
 String formatTime(int minuteOfDay) {
   char formatted[6];
@@ -557,6 +575,7 @@ bool sendNilanCommand(const String& command, String& reply) {
     blinkError(4);
     return false;
   }
+  nilan.flush();
   if (!readNilanLine(reply)) {
     blinkError(5);
     return false;
@@ -571,11 +590,15 @@ bool startUsbHost() {
   return false;
 #else
   if (!usbHostStarted) {
-    usbHostStarted = nilan.begin(9600, 0, 0, 8);
+    usbEnumerationLog = "Starting USB host";
+    usbHostStarted = USBHost.begin();
     if (!usbHostStarted) {
-    blinkError(2);
-    return false;
-  }
+      recordUsbEnumerationLog("USB host task could not be started");
+      blinkError(2);
+      return false;
+    }
+    nilan.begin(9600);
+    recordUsbEnumerationLog("USB host started; waiting for CDC serial device");
   }
   return usbHostStarted;
 #endif
@@ -586,10 +609,12 @@ bool connectToNilan() {
     return false;
   }
 
-  bool newlyConnected = !static_cast<bool>(nilan);
+  bool newlyConnected = !nilan.mounted();
   unsigned long startedAt = millis();
-  while (!static_cast<bool>(nilan)) {
+  while (!nilan.mounted()) {
+    USBHost.task();
     if (millis() - startedAt >= USB_TIMEOUT_MS) {
+      recordUsbEnumerationLog("No USB CDC serial device mounted after 10 seconds");
       blinkError(3);
       return false;
     }
@@ -600,7 +625,15 @@ bool connectToNilan() {
   }
 
   String reply;
-  return sendNilanCommand("S SVC +00000\r", reply) && reply == "OK";
+  if (!sendNilanCommand("S SVC +00000\r", reply)) {
+    recordUsbEnumerationLog("Nilan handshake produced no reply");
+    return false;
+  }
+  if (reply != "OK") {
+    recordUsbEnumerationLog((String("Unexpected Nilan handshake reply: ") + reply).c_str());
+    return false;
+  }
+  return true;
 }
 
 bool setNilanParameter(const char* parameter, int value) {
@@ -1137,6 +1170,12 @@ void sendEmailNotification() {
     message.subject = "Bedroom ventilation controller error";
     message.message =
         "The controller could not communicate with or configure the Nilan unit.";
+    if (!usbEnumerationLog.isEmpty()) {
+      message.message += "<p><strong>USB enumeration log</strong><br>";
+      message.message += escapeHtml(usbEnumerationLog);
+      message.message.replace("\n", "<br>");
+      message.message += "</p>";
+    }
   }
 
   if (connectNetwork()) {
@@ -1185,6 +1224,10 @@ void setup() {
 }
 
 void loop() {
+  if (usbHostStarted) {
+    USBHost.task();
+  }
+
   if (webServerStarted) {
     webServer.handleClient();
   }
