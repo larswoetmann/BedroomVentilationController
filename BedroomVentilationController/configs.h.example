@@ -1,0 +1,18 @@
+// Private controller credentials. Copy this file to configs.h, then replace
+// every placeholder below before uploading the sketch. configs.h is ignored by Git.
+
+#pragma once
+
+// Wi-Fi network used by the controller.
+#define SSID "YOUR_WIFI_NAME"
+#define PASSWORD "YOUR_WIFI_PASSWORD"
+
+// SMTP account used to send controller notifications.
+#define EMAIL_SENDER_ADDRESS "controller@example.com"
+#define EMAIL_SMTP_PASSWORD "YOUR_SMTP_OR_APP_PASSWORD"
+#define EMAIL_SENDER_NAME "Bedroom Ventilation Controller"
+#define EMAIL_SMTP_HOST "smtp.example.com"
+#define EMAIL_SMTP_PORT 465
+
+// Where the controller sends notifications.
+#define EMAIL_RECIPIENT_ADDRESS "you@example.com"
