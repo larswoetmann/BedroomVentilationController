@@ -68,7 +68,7 @@ const Cts400SettingDefinition MODE_SETTING_DEFINITIONS[] = {
     {"F2O", "f2o", "Extract fan level 2 (%)", 20, 100, Cts400SettingKind::IntegerRange},
     {"F3O", "f3o", "Extract fan level 3 (%)", 20, 100, Cts400SettingKind::IntegerRange},
     {"F4O", "f4o", "Extract fan level 4 (%)", 20, 100, Cts400SettingKind::IntegerRange},
-    {"RTS", "rts", "Wanted room temperature", 10, 28, Cts400SettingKind::IntegerRange},
+    {"RTS", "rts", "Wanted room temperature", 0, 28, Cts400SettingKind::IntegerRange},
 };
 
 const Cts400SettingDefinition IMMEDIATE_SETTING_DEFINITIONS[] = {
