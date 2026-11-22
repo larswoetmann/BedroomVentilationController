@@ -1,0 +1,60 @@
+#pragma once
+static const char kConfig[] = R"VENTCFG(# Copy this file to the root of the SD card as ventilation.cfg.
+# Times use 24-hour HH:MM format. Night time may span midnight.
+night_start_time = 19:00
+night_end_time = 06:00
+
+# Dates use MM-DD. The end date is exclusive: 10-01 through 05-01 means
+# winter mode applies from October 1 up to, but not including, May 1.
+winter_start_date = 10-01
+winter_end_date = 05-01
+
+# Day Mode and Night Mode CTS400 settings. Fan levels are 20-100 percent.
+# RTS is the wanted room-temperature setting (10-28). The Day RTS value is
+# applied during the Winter Period; the Night RTS value is always applied.
+day_f1i = 20
+day_f2i = 35
+day_f3i = 55
+day_f4i = 100
+day_f1o = 25
+day_f2o = 40
+day_f3o = 60
+day_f4o = 100
+day_rts = 28
+night_f1i = 20
+night_f2i = 35
+night_f3i = 55
+night_f4i = 100
+night_f1o = 25
+night_f2o = 40
+night_f3o = 60
+night_f4o = 100
+night_rts = 15
+
+# CTS400 settings applied individually from the Local Control Page.
+# SWT is 5-20; DST is 1-5; DSP is 5-10; DMT is 5-60; FCP is 0-360;
+# DBS is 0-4; LHL is 0-3; HHL is 0 or 2-4.
+swt = 13
+dst = 3
+dsp = 7
+dmt = 30
+fcp = 90
+dbs = 0
+lhl = 1
+hhl = 3
+
+# Optional night-time cold-weather reduction. When enabled, the controller
+# reads GT8 (outdoor air temperature) every 15 minutes during night mode and
+# subtracts the calculated percentage points from every Night Mode fan level.
+# Example: with 10.0 and 2.5, an outdoor temperature of 8.0 C reduces each
+# night level by 5 percentage points. Omit both settings to disable this.
+# night_temperature_threshold_c = 10.0
+# night_ventilation_reduction_per_degree = 2.5
+
+# Optional static network configuration. Uncomment and replace all four values
+# to disable DHCP. Restart the controller after changing network settings.
+# static_ip = 192.168.1.42
+# static_gateway = 192.168.1.1
+# static_subnet = 255.255.255.0
+# static_dns = 192.168.1.1
+)VENTCFG";
