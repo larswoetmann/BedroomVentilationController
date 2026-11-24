@@ -9,8 +9,20 @@
 #include <sys/time.h>
 #include <time.h>
 #include "configs.h"
-
 #include <EMailSender.h>
+#include <HTTPClient.h>
+#include <Update.h>
+#include <esp_ota_ops.h>
+#include <ctype.h>
+#include <errno.h>
+#include <math.h>
+
+// Firmware bin and version url
+const char* firmwareUrl = "https://raw.githubusercontent.com/larswoetmann/BedroomVentilationController/refs/heads/main/BedroomVentilationController/latest-release/BedroomVentilationController.ino.bin";
+const char* versionUrl = "https://raw.githubusercontent.com/larswoetmann/BedroomVentilationController/refs/heads/main/BedroomVentilationController/latest-release/version.txt";
+// Current firmware version
+const char* currentFirmwareVersion = "1.0"; //Remember to update this, and remember to update the version number in version.txt
+
 
 // Danish wall-clock time: CET in winter, CEST in summer.
 constexpr char DENMARK_TIME_ZONE[] = "CET-1CEST,M3.5.0/2,M10.5.0/3";
@@ -1219,6 +1231,7 @@ void setup() {
   if (!connectNetworkAndSetTime()) {
     status = ControllerStatus::ErrorNetwork;
   } else {
+    checkForFirmwareUpdate();
     startWebServer();
   }
 }
@@ -1305,3 +1318,125 @@ void loop() {
   }
 
 }
+
+#pragma region update
+void checkForFirmwareUpdate() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  // Step 1: Fetch the latest version from GitHub
+  String latestVersion = fetchLatestVersion();
+  if (latestVersion == "") {
+    blinkError(2);
+    return;
+  }
+
+  // Step 2: Compare versions
+  if (latestVersion != currentFirmwareVersion) {
+    downloadAndApplyFirmware();
+  } 
+}
+
+String fetchLatestVersion() {
+  HTTPClient http;
+  http.begin(versionUrl);
+
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    String latestVersion = http.getString();
+    latestVersion.trim();  // Remove any extra whitespace
+    http.end();
+    return latestVersion;
+  } else {
+    blinkError(2);
+    http.end();
+    return "";
+  }
+}
+
+void downloadAndApplyFirmware() {
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.begin(firmwareUrl);
+
+  int httpCode = http.GET();
+
+  if (httpCode == HTTP_CODE_OK) {
+    int contentLength = http.getSize();
+
+    if (contentLength > 0) {
+      WiFiClient* stream = http.getStreamPtr();
+      if (startOTAUpdate(stream, contentLength)) {
+        delay(2000);
+        ESP.restart();
+      } else {
+        blinkError(2);
+      }
+    } else {
+      blinkError(2);
+    }
+  } else {
+    blinkError(2);
+  }
+  http.end();
+}
+
+bool startOTAUpdate(WiFiClient* client, int contentLength) {
+  if (!Update.begin(contentLength)) {
+    return false;
+  }
+
+  size_t written = 0;
+  int progress = 0;
+  int lastProgress = 0;
+
+  // Timeout variables
+  const unsigned long timeoutDuration = 120*1000;  // 120 seconds timeout
+  unsigned long lastDataTime = millis();
+
+  while (written < contentLength) {
+    if (client->available()) {
+      uint8_t buffer[128];
+      size_t len = client->read(buffer, sizeof(buffer));
+      if (len > 0) {
+        Update.write(buffer, len);
+        written += len;
+        lastDataTime = millis();
+
+        // Calculate and print progress
+        progress = (written * 100) / contentLength;
+        if (progress != lastProgress) {
+          lastProgress = progress;
+        }
+      }
+    }
+    // Check for timeout
+    if (millis() - lastDataTime > timeoutDuration) {
+      Update.abort();
+      return false;
+    }
+
+    yield();
+  }
+
+  if (written != contentLength) {
+    Update.abort();
+    return false;
+  }
+
+  if (!Update.end()) {
+    return false;
+  }
+
+  sendUpdateEmailNotification();
+  return true;
+}
+
+void sendUpdateEmailNotification() {
+  EMailSender::EMailMessage message;
+  message.subject = "Bedroom ventilation controller updated";
+  message.message = "<p>The controller software updated.</p>";
+  const EMailSender::Response response = emailSender.send(EMAIL_RECIPIENT_ADDRESS, message);
+}
+#pragma endregion
