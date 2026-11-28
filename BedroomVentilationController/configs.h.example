@@ -4,15 +4,15 @@
 #pragma once
 
 // Wi-Fi network used by the controller.
-#define SSID "Pilotvej47"
-#define PASSWORD "Pilotvej47!"
+#define SSID "<wifi ssid>"
+#define PASSWORD "<wifi password>"
 
 // SMTP account used to send controller notifications.
-#define EMAIL_SENDER_ADDRESS "larswp@gmail.com"
-#define EMAIL_SMTP_PASSWORD "dafdgcxmgwewakbd"
+#define EMAIL_SENDER_ADDRESS "<sender email>"
+#define EMAIL_SMTP_PASSWORD "<password>"
 #define EMAIL_SENDER_NAME "Bedroom Ventilation Controller"
 #define EMAIL_SMTP_HOST "smtp.gmail.com"
 #define EMAIL_SMTP_PORT 465
 
 // Where the controller sends notifications.
-#define EMAIL_RECIPIENT_ADDRESS "larswp@gmail.com"
+#define EMAIL_RECIPIENT_ADDRESS "<recipient email>"
